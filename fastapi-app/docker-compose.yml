@@ -91,8 +91,8 @@ services:
       - .env
 
     environment:
-      SERVER_NAME: "3.234.162.115"
-      SERVER_HOST: "http://3.234.162.115"
+      SERVER_NAME: "13.234.162.115"
+      SERVER_HOST: "http://13.234.162.115"
       SMTP_HOST: "${SMTP_HOST}"
 
     logging:
@@ -130,8 +130,8 @@ services:
       - .env
 
     environment:
-      SERVER_NAME: "3.234.162.115"
-      SERVER_HOST: "http://3.234.162.115"
+      SERVER_NAME: "13.234.162.115"
+      SERVER_HOST: "http://13.234.162.115"
       SMTP_HOST: "${SMTP_HOST}"
 
     logging:
