@@ -197,4 +197,5 @@ volumes:
 networks:
   traefik-public:
     name: traefik-public
-    external: true
+    driver: overlay
+    attachable: true
