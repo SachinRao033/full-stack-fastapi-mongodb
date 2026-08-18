@@ -1,6 +1,6 @@
 services:
   proxy:
-    image: traefik:v2.2
+    image: traefik:v2.11
     networks:
       - ${TRAEFIK_PUBLIC_NETWORK?Variable not set}
       - default
@@ -165,15 +165,15 @@ services:
         - traefik.enable=true
         - traefik.constraint-label-stack=${TRAEFIK_TAG?Variable not set}
         - traefik.http.routers.${STACK_NAME?Variable not set}-frontend-http.rule=PathPrefix(`/`)
-        - traefik.http.services.${STACK_NAME?Variable not set}-frontend.loadbalancer.server.port=80
+        - traefik.http.services.${STACK_NAME?Variable not set}-frontend.loadbalancer.server.port=3000
 
   mongodb:
     image: mongo
-    ports:
-      - 27017:27017
+    volumes:
+        - app-mongodb-data:/data/db
 
 volumes:
-  app-db-data:
+  app-mongodb-data:
 
 networks:
   traefik-public:
