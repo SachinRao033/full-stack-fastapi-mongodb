@@ -65,7 +65,7 @@ services:
 
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.flower.rule=Host(`flower.${DOMAIN}`)"
+      - "traefik.http.routers.flower.rule=Host(`flower.13.234.162.115`)"
       - "traefik.http.routers.flower.entrypoints=http"
       - "traefik.http.services.flower.loadbalancer.server.port=5555"
 
@@ -107,7 +107,7 @@ services:
       - "traefik.enable=true"
 
       # FastAPI API
-      - "traefik.http.routers.backend.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`))"
+      - "traefik.http.routers.backend.rule=Host(`13.234.162.115`) && (PathPrefix(`/api`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`))"
       - "traefik.http.routers.backend.entrypoints=http"
       - "traefik.http.services.backend.loadbalancer.server.port=80"
 
@@ -163,7 +163,7 @@ services:
       - "traefik.enable=true"
 
       # Frontend
-      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.frontend.rule=Host(`13.234.162.115`)"
       - "traefik.http.routers.frontend.entrypoints=http"
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
 
