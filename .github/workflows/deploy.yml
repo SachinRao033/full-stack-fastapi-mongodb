@@ -7,54 +7,53 @@ on:
 
 jobs:
   deploy:
-    name: Deploy to EC2
     runs-on: ubuntu-latest
     environment: Secrets
 
     steps:
 
-      # ==========================================
-      # 1. Checkout
-      # ==========================================
+      # ==========================================================
+      # 1. CHECKOUT CODE
+      # ==========================================================
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ==========================================
-      # 2. Configure SSH
-      # ==========================================
+
+      # ==========================================================
+      # 2. SETUP SSH
+      # ==========================================================
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
 
-          printf '%s\n' '${{ secrets.EC2_SSH_KEY }}' > ~/.ssh/ec2_key
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
 
           chmod 600 ~/.ssh/ec2_key
 
-          ssh-keyscan -H '${{ secrets.EC2_HOST }}' >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
-      # ==========================================
-      # 3. Deploy
-      # ==========================================
+
+      # ==========================================================
+      # 3. DEPLOY TO EC2
+      # ==========================================================
       - name: Deploy to EC2
         run: |
+
           ssh -i ~/.ssh/ec2_key \
-            '${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}' \
-            'APP_PATH="${{ secrets.APP_PATH }}" bash -s' << 'EOF'
+            "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" << 'EOF'
 
             set -e
 
-            echo "======================================"
+            echo "=========================================="
             echo "STARTING DEPLOYMENT"
-            echo "======================================"
+            echo "=========================================="
 
-            cd "$APP_PATH"
+            cd "${{ secrets.APP_PATH }}"
 
-            echo "Application path:"
-            pwd
 
-            # --------------------------------------
-            # Pull latest code
-            # --------------------------------------
+            # ====================================================
+            # UPDATE SOURCE CODE
+            # ====================================================
 
             echo "Pulling latest code..."
 
@@ -62,182 +61,231 @@ jobs:
 
             git reset --hard origin/main
 
-            # --------------------------------------
-            # Check files
-            # --------------------------------------
 
-            echo "Checking required files..."
+            # ====================================================
+            # CHECK DOCKER
+            # ====================================================
 
-            test -f .env
-            test -f docker-compose.yml
-
-            # --------------------------------------
-            # Load environment variables
-            # --------------------------------------
-
-            echo "Loading environment..."
-
-            set -a
-            source .env
-            set +a
-
-            echo "Stack name: $STACK_NAME"
-            echo "Domain: $DOMAIN"
-
-            # --------------------------------------
-            # Docker checks
-            # --------------------------------------
-
-            echo "Checking Docker..."
+            echo "=========================================="
+            echo "CHECKING DOCKER"
+            echo "=========================================="
 
             docker --version
 
             docker compose version
 
-            # --------------------------------------
-            # Swarm check
-            # --------------------------------------
 
-            echo "Checking Docker Swarm..."
+            # ====================================================
+            # CHECK DOCKER SWARM
+            # ====================================================
 
-            docker info --format 'Swarm: {{.Swarm.LocalNodeState}}'
+            echo "=========================================="
+            echo "CHECKING DOCKER SWARM"
+            echo "=========================================="
 
-            # --------------------------------------
-            # Traefik network
-            # --------------------------------------
+            SWARM_STATE=$(docker info --format '{{.Swarm.LocalNodeState}}')
 
-            echo "Checking traefik-public network..."
+            echo "Swarm state: $SWARM_STATE"
 
-            if ! docker network inspect "$TRAEFIK_PUBLIC_NETWORK" >/dev/null 2>&1; then
+            if [ "$SWARM_STATE" != "active" ]; then
+              echo "ERROR: Docker Swarm is not active."
+              exit 1
+            fi
 
-              echo "Creating Swarm overlay network..."
+
+            # ====================================================
+            # CHECK / CREATE TRAEFIK OVERLAY NETWORK
+            # ====================================================
+
+            echo "=========================================="
+            echo "CHECKING TRAEFIK NETWORK"
+            echo "=========================================="
+
+            if docker network inspect traefik-public >/dev/null 2>&1; then
+
+              echo "traefik-public network already exists."
+
+            else
+
+              echo "Creating traefik-public overlay network..."
 
               docker network create \
                 --driver overlay \
                 --attachable \
-                "$TRAEFIK_PUBLIC_NETWORK"
-
-            else
-
-              echo "Traefik network already exists."
-
-              NETWORK_DRIVER=$(docker network inspect \
-                "$TRAEFIK_PUBLIC_NETWORK" \
-                --format '{{.Driver}}')
-
-              if [ "$NETWORK_DRIVER" != "overlay" ]; then
-                echo "ERROR: traefik-public is not an overlay network."
-                echo "Current driver: $NETWORK_DRIVER"
-                exit 1
-              fi
+                traefik-public
 
             fi
 
-            # --------------------------------------
-            # Compose validation
-            # --------------------------------------
 
-            echo "Validating Docker Compose..."
+            # ====================================================
+            # VERIFY TRAEFIK NETWORK
+            # ====================================================
+
+            echo "=========================================="
+            echo "VERIFYING TRAEFIK NETWORK"
+            echo "=========================================="
+
+            docker network inspect traefik-public \
+              --format 'Name={{.Name}} Driver={{.Driver}} Scope={{.Scope}}'
+
+
+            # ====================================================
+            # CHECK REQUIRED FILES
+            # ====================================================
+
+            echo "=========================================="
+            echo "CHECKING REQUIRED FILES"
+            echo "=========================================="
+
+            test -f .env
+            test -f docker-compose.yml
+            test -f conf/rabbitmq.conf
+            test -f frontend/.env.local
+
+            echo "All required files are present."
+
+
+            # ====================================================
+            # VALIDATE DOCKER COMPOSE
+            # ====================================================
+
+            echo "=========================================="
+            echo "VALIDATING DOCKER COMPOSE"
+            echo "=========================================="
 
             docker compose \
               -f docker-compose.yml \
               config > /dev/null
 
-            echo "Compose validation successful."
+            echo "Docker Compose validation successful."
 
-            # --------------------------------------
-            # Build Backend
-            # --------------------------------------
 
-            echo "Building backend..."
+            # ====================================================
+            # BUILD BACKEND
+            # ====================================================
+
+            echo "=========================================="
+            echo "BUILDING BACKEND"
+            echo "=========================================="
 
             docker compose \
               -f docker-compose.yml \
               build backend
 
-            # --------------------------------------
-            # Build Celery
-            # --------------------------------------
 
-            echo "Building celeryworker..."
+            # ====================================================
+            # BUILD CELERY WORKER
+            # ====================================================
+
+            echo "=========================================="
+            echo "BUILDING CELERY WORKER"
+            echo "=========================================="
 
             docker compose \
               -f docker-compose.yml \
               build celeryworker
 
-            # --------------------------------------
-            # Build Frontend
-            # --------------------------------------
 
-            echo "Building frontend..."
+            # ====================================================
+            # BUILD FRONTEND
+            # ====================================================
+
+            echo "=========================================="
+            echo "BUILDING FRONTEND"
+            echo "=========================================="
 
             docker compose \
               -f docker-compose.yml \
               build frontend
 
-            # --------------------------------------
-            # Deploy Docker Swarm
-            # --------------------------------------
 
-            echo "Deploying stack: $STACK_NAME"
+            # ====================================================
+            # DEPLOY DOCKER SWARM STACK
+            # ====================================================
+
+            echo "=========================================="
+            echo "DEPLOYING DOCKER SWARM STACK"
+            echo "=========================================="
 
             docker stack deploy \
-              --detach=false \
+              --detach=true \
               -c docker-compose.yml \
-              "$STACK_NAME"
+              fastapi-app
 
-            # --------------------------------------
-            # Wait
-            # --------------------------------------
 
-            echo "Waiting for services..."
+            # ====================================================
+            # WAIT FOR SERVICES
+            # ====================================================
+
+            echo "=========================================="
+            echo "WAITING FOR SERVICES"
+            echo "=========================================="
 
             sleep 20
 
-            # --------------------------------------
-            # Stack services
-            # --------------------------------------
 
-            echo "======================================"
+            # ====================================================
+            # SHOW STACK SERVICES
+            # ====================================================
+
+            echo "=========================================="
             echo "STACK SERVICES"
-            echo "======================================"
+            echo "=========================================="
 
-            docker stack services "$STACK_NAME"
+            docker stack services fastapi-app
 
-            # --------------------------------------
-            # Service status
-            # --------------------------------------
 
-            echo "======================================"
+            # ====================================================
+            # SHOW SERVICE STATUS
+            # ====================================================
+
+            echo "=========================================="
             echo "SERVICE STATUS"
-            echo "======================================"
+            echo "=========================================="
 
-            docker service ps "${STACK_NAME}_proxy" || true
+            docker service ps fastapi-app_proxy --no-trunc
 
-            docker service ps "${STACK_NAME}_backend" || true
+            docker service ps fastapi-app_backend --no-trunc
 
-            docker service ps "${STACK_NAME}_celeryworker" || true
+            docker service ps fastapi-app_celeryworker --no-trunc
 
-            docker service ps "${STACK_NAME}_frontend" || true
+            docker service ps fastapi-app_frontend --no-trunc
 
-            docker service ps "${STACK_NAME}_mongodb" || true
+            docker service ps fastapi-app_mongodb --no-trunc
 
-            docker service ps "${STACK_NAME}_queue" || true
+            docker service ps fastapi-app_queue --no-trunc
 
-            docker service ps "${STACK_NAME}_flower" || true
+            docker service ps fastapi-app_flower --no-trunc
 
-            # --------------------------------------
-            # Running containers
-            # --------------------------------------
 
-            echo "======================================"
+            # ====================================================
+            # SHOW RUNNING CONTAINERS
+            # ====================================================
+
+            echo "=========================================="
             echo "RUNNING CONTAINERS"
-            echo "======================================"
+            echo "=========================================="
 
             docker ps
 
-            echo "======================================"
-            echo "DEPLOYMENT COMPLETED"
-            echo "======================================"
+
+            # ====================================================
+            # CHECK SERVICE REPLICAS
+            # ====================================================
+
+            echo "=========================================="
+            echo "CHECKING SERVICE REPLICAS"
+            echo "=========================================="
+
+            docker stack services fastapi-app
+
+
+            # ====================================================
+            # DEPLOYMENT COMPLETE
+            # ====================================================
+
+            echo "=========================================="
+            echo "DEPLOYMENT SUCCESSFUL"
+            echo "=========================================="
 
           EOF
