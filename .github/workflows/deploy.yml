@@ -1,4 +1,4 @@
-name: Deploy FastAPI MongoDB Application
+name: Deploy FastAPI MongoDB App
 
 on:
   push:
@@ -7,35 +7,21 @@ on:
 
 jobs:
   deploy:
-    name: Deploy to EC2
-    environment: Secrets
     runs-on: ubuntu-latest
+    environment: Secrets
 
     steps:
 
-      # ============================================================
-      # 1. Checkout Repository
-      # ============================================================
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
 
-
-      # ============================================================
-      # 2. Configure SSH
-      # ============================================================
-      - name: Configure SSH
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
           chmod 600 ~/.ssh/ec2_key
-
           ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
-
-      # ============================================================
-      # 3. Deploy Application to EC2
-      # ============================================================
       - name: Deploy to EC2
         run: |
           ssh -i ~/.ssh/ec2_key \
@@ -43,558 +29,70 @@ jobs:
 
             set -e
 
-            echo "=================================================="
-            echo "STARTING DEPLOYMENT"
-            echo "=================================================="
-
-            # ------------------------------------------------------
-            # Application directory
-            # ------------------------------------------------------
             cd "${{ secrets.APP_PATH }}"
 
-            echo "Application Path:"
-            pwd
-
-            echo ""
-            echo "=================================================="
-            echo "PULLING LATEST CODE"
-            echo "=================================================="
-
+            echo "Pulling latest code..."
             git fetch origin
             git reset --hard origin/main
 
-            echo ""
-            echo "Latest Commit:"
-            git log -1 --oneline
-
-
-            # ------------------------------------------------------
-            # Docker checks
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "DOCKER VERSION"
-            echo "=================================================="
-
+            echo "Checking Docker..."
             docker --version
             docker compose version
 
-
-            # ------------------------------------------------------
-            # Docker Swarm check
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "DOCKER SWARM STATUS"
-            echo "=================================================="
-
+            echo "Checking Docker Swarm..."
             docker info --format 'Swarm: {{.Swarm.LocalNodeState}}'
 
-            if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
-              echo "ERROR: Docker Swarm is not active"
-              exit 1
-            fi
-
-            echo "Docker Swarm is active."
-
-
-            # ------------------------------------------------------
-            # Required files
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "CHECKING REQUIRED FILES"
-            echo "=================================================="
-
+            echo "Checking required files..."
             test -f .env
-            echo ".env                 OK"
-
             test -f docker-compose.yml
-            echo "docker-compose.yml   OK"
-
             test -f conf/rabbitmq.conf
-            echo "rabbitmq.conf        OK"
 
+            echo "Validating Compose..."
+            docker compose -f docker-compose.yml config > /dev/null
 
-            # ------------------------------------------------------
-            # Show important environment configuration
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "ENVIRONMENT CONFIGURATION"
-            echo "=================================================="
+            echo "Building backend..."
+            docker compose -f docker-compose.yml build backend
 
-            grep -E \
-            "DOMAIN=|BACKEND_CORS_ORIGINS=|MONGO_DATABASE=|MONGO_DATABASE_URI=|DOCKER_IMAGE_BACKEND=|DOCKER_IMAGE_CELERYWORKER=|DOCKER_IMAGE_FRONTEND=" \
-            .env || true
+            echo "Building celeryworker..."
+            docker compose -f docker-compose.yml build celeryworker
 
+            echo "Building frontend..."
+            docker compose -f docker-compose.yml build frontend
 
-            # ------------------------------------------------------
-            # Validate Docker Compose
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "VALIDATING DOCKER COMPOSE"
-            echo "=================================================="
-
-            docker compose -f docker-compose.yml config > /tmp/docker-compose-config.yml
-
-            echo "Docker Compose configuration is valid."
-
-
-            # ------------------------------------------------------
-            # Display services
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "COMPOSE SERVICES"
-            echo "=================================================="
-
-            docker compose -f docker-compose.yml config --services
-
-
-            # ------------------------------------------------------
-            # Build application images
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "BUILDING APPLICATION IMAGES"
-            echo "=================================================="
-
-            docker compose -f docker-compose.yml build \
-              backend \
-              celeryworker \
-              frontend
-
-
-            # ------------------------------------------------------
-            # Load environment variables
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "LOADING ENVIRONMENT"
-            echo "=================================================="
-
-            set -a
-            source .env
-            set +a
-
-
-            # ------------------------------------------------------
-            # Validate Docker Swarm configuration
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "VALIDATING DOCKER SWARM CONFIGURATION"
-            echo "=================================================="
-
-            docker stack config \
-              -c docker-compose.yml \
-              > /tmp/example-stack.yml
-
-            echo "Docker Swarm configuration is valid."
-
-
-            # ------------------------------------------------------
-            # Create Traefik network if required
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "CHECKING TRAEFIK NETWORK"
-            echo "=================================================="
-
-            if ! docker network inspect traefik-public >/dev/null 2>&1; then
-              echo "Creating traefik-public network..."
-
-              docker network create \
-                --driver overlay \
-                --attachable \
-                traefik-public
-
-            else
-              echo "traefik-public network already exists."
-            fi
-
-
-            # ------------------------------------------------------
-            # Deploy Docker Swarm stack
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "DEPLOYING DOCKER STACK"
-            echo "=================================================="
-
+            echo "Deploying Docker Stack..."
             docker stack deploy \
               -c docker-compose.yml \
               example-com
 
-            echo "Docker stack deployment command completed."
+            echo "Waiting for services..."
+            sleep 20
 
-
-            # ------------------------------------------------------
-            # Wait for containers
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "WAITING FOR SERVICES"
-            echo "=================================================="
-
-            sleep 30
-
-
-            # ------------------------------------------------------
-            # Stack services
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "DOCKER STACK SERVICES"
-            echo "=================================================="
+            echo "======================================"
+            echo "STACK SERVICES"
+            echo "======================================"
 
             docker stack services example-com
 
+            echo "======================================"
+            echo "SERVICE STATUS"
+            echo "======================================"
 
-            # ------------------------------------------------------
-            # Check each service
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "CHECKING INDIVIDUAL SERVICES"
-            echo "=================================================="
+            docker service ps example-com_proxy
+            docker service ps example-com_backend
+            docker service ps example-com_celeryworker
+            docker service ps example-com_frontend
+            docker service ps example-com_mongodb
+            docker service ps example-com_queue
+            docker service ps example-com_flower
 
-
-            check_service() {
-
-              SERVICE=$1
-
-              echo ""
-              echo "--------------------------------------------------"
-              echo "Checking service: $SERVICE"
-              echo "--------------------------------------------------"
-
-              docker service inspect \
-                "example-com_${SERVICE}" \
-                >/dev/null 2>&1
-
-              if [ $? -ne 0 ]; then
-                echo "ERROR: Service example-com_${SERVICE} does not exist."
-                return 1
-              fi
-
-              echo "Service exists: example-com_${SERVICE}"
-
-              echo ""
-              echo "Service status:"
-
-              docker service ps \
-                "example-com_${SERVICE}" \
-                --no-trunc
-
-              echo ""
-              echo "Service replicas:"
-
-              docker service ls \
-                --filter "name=example-com_${SERVICE}"
-
-            }
-
-
-            # ------------------------------------------------------
-            # Check all application services
-            # ------------------------------------------------------
-
-            check_service proxy
-
-            check_service backend
-
-            check_service celeryworker
-
-            check_service frontend
-
-            check_service mongodb
-
-            check_service queue
-
-            check_service flower
-
-
-            # ------------------------------------------------------
-            # Check running containers
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
+            echo "======================================"
             echo "RUNNING CONTAINERS"
-            echo "=================================================="
+            echo "======================================"
 
-            docker ps \
-              --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+            docker ps
 
-
-            # ------------------------------------------------------
-            # Check all containers belonging to stack
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "STACK CONTAINERS"
-            echo "=================================================="
-
-            docker ps \
-              --filter "label=com.docker.swarm.service.name" \
-              --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
-
-
-            # ------------------------------------------------------
-            # Check MongoDB
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "CHECKING MONGODB"
-            echo "=================================================="
-
-            MONGO_CONTAINER=$(docker ps \
-              --filter "name=example-com_mongodb" \
-              --format "{{.ID}}" | head -n 1)
-
-            if [ -z "$MONGO_CONTAINER" ]; then
-              echo "ERROR: MongoDB container is not running."
-              exit 1
-            fi
-
-            docker exec "$MONGO_CONTAINER" \
-              mongosh \
-              --eval "db.adminCommand('ping')"
-
-            echo "MongoDB health check PASSED."
-
-
-            # ------------------------------------------------------
-            # Check RabbitMQ
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "CHECKING RABBITMQ"
-            echo "=================================================="
-
-            QUEUE_CONTAINER=$(docker ps \
-              --filter "name=example-com_queue" \
-              --format "{{.ID}}" | head -n 1)
-
-            if [ -z "$QUEUE_CONTAINER" ]; then
-              echo "ERROR: RabbitMQ container is not running."
-              exit 1
-            fi
-
-            docker exec "$QUEUE_CONTAINER" \
-              rabbitmq-diagnostics ping
-
-            echo "RabbitMQ health check PASSED."
-
-
-            # ------------------------------------------------------
-            # Check FastAPI
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "CHECKING FASTAPI"
-            echo "=================================================="
-
-            curl \
-              --fail \
-              --silent \
-              --show-error \
-              http://127.0.0.1/docs \
-              >/dev/null || {
-
-                echo "FastAPI endpoint check failed."
-
-                docker service logs \
-                  --tail 100 \
-                  example-com_backend
-
-                exit 1
-              }
-
-            echo "FastAPI check PASSED."
-
-
-            # ------------------------------------------------------
-            # Check Frontend
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "CHECKING FRONTEND"
-            echo "=================================================="
-
-            curl \
-              --fail \
-              --silent \
-              --show-error \
-              http://127.0.0.1/ \
-              >/dev/null || {
-
-                echo "Frontend endpoint check failed."
-
-                docker service logs \
-                  --tail 100 \
-                  example-com_frontend
-
-                exit 1
-              }
-
-            echo "Frontend check PASSED."
-
-
-            # ------------------------------------------------------
-            # Check service failures
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "CHECKING SERVICE FAILURES"
-            echo "=================================================="
-
-            FAILED=0
-
-            for SERVICE in \
-              proxy \
-              backend \
-              celeryworker \
-              frontend \
-              mongodb \
-              queue \
-              flower
-            do
-
-              echo ""
-              echo "Service: example-com_${SERVICE}"
-
-              docker service ps \
-                "example-com_${SERVICE}" \
-                --filter desired-state=running \
-                --format "table {{.Name}}\t{{.CurrentState}}\t{{.Error}}"
-
-              REPLICAS=$(docker service ls \
-                --filter "name=example-com_${SERVICE}" \
-                --format "{{.Replicas}}")
-
-              echo "Replicas: $REPLICAS"
-
-              if echo "$REPLICAS" | grep -q "0/"; then
-                echo "ERROR: $SERVICE has no running replicas."
-                FAILED=1
-              fi
-
-            done
-
-
-            if [ "$FAILED" -eq 1 ]; then
-
-              echo ""
-              echo "=================================================="
-              echo "DEPLOYMENT FAILED"
-              echo "=================================================="
-
-              docker stack services example-com
-
-              exit 1
-
-            fi
-
-
-            # ------------------------------------------------------
-            # Final status
-            # ------------------------------------------------------
-            echo ""
-            echo "=================================================="
-            echo "FINAL DOCKER STACK STATUS"
-            echo "=================================================="
-
-            docker stack services example-com
-
-
-            echo ""
-            echo "=================================================="
-            echo "DEPLOYMENT COMPLETED SUCCESSFULLY"
-            echo "=================================================="
-
-            echo "Application:"
-            echo "http://${DOMAIN}"
-
-          EOF
-
-
-      # ============================================================
-      # 4. Final Verification
-      # ============================================================
-      - name: Final Deployment Verification
-        run: |
-          ssh -i ~/.ssh/ec2_key \
-            "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" << 'EOF'
-
-            set -e
-
-            cd "${{ secrets.APP_PATH }}"
-
-            echo "=================================================="
-            echo "FINAL VERIFICATION"
-            echo "=================================================="
-
-            echo ""
-            echo "Docker Swarm:"
-            docker info --format 'Swarm: {{.Swarm.LocalNodeState}}'
-
-            echo ""
-            echo "Stack:"
-            docker stack services example-com
-
-            echo ""
-            echo "Containers:"
-            docker ps \
-              --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
-
-            echo ""
-            echo "Recent Backend Logs:"
-            docker service logs \
-              --tail 20 \
-              example-com_backend
-
-            echo ""
-            echo "Recent MongoDB Logs:"
-            docker service logs \
-              --tail 20 \
-              example-com_mongodb
-
-            echo ""
-            echo "Recent RabbitMQ Logs:"
-            docker service logs \
-              --tail 20 \
-              example-com_queue
-
-            echo ""
-            echo "Recent Frontend Logs:"
-            docker service logs \
-              --tail 20 \
-              example-com_frontend
-
-            echo ""
-            echo "Recent Celery Logs:"
-            docker service logs \
-              --tail 20 \
-              example-com_celeryworker
-
-            echo ""
-            echo "Recent Flower Logs:"
-            docker service logs \
-              --tail 20 \
-              example-com_flower
-
-            echo ""
-            echo "Recent Traefik Logs:"
-            docker service logs \
-              --tail 20 \
-              example-com_proxy
-
-            echo ""
-            echo "=================================================="
-            echo "FINAL VERIFICATION COMPLETED"
-            echo "=================================================="
+            echo "======================================"
+            echo "DEPLOYMENT SUCCESSFUL"
+            echo "======================================"
 
           EOF
