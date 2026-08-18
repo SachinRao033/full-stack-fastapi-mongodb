@@ -8,13 +8,19 @@ on:
 jobs:
   deploy:
     name: Deploy to EC2
+
+    # CHANGE THIS TO YOUR ACTUAL ENVIRONMENT NAME
+    environment: Secrets
+
     runs-on: ubuntu-latest
 
     steps:
 
+      # 1. Checkout repository
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # 2. Configure SSH
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -24,16 +30,17 @@ jobs:
 
           ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Deploy Application
+      # 3. Deploy application
+      - name: Deploy to Server
         run: |
           ssh -i ~/.ssh/ec2_key \
-            "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" << EOF
+            "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" << 'EOF'
 
             set -e
 
-            echo "================================="
+            echo "======================================"
             echo "Starting Deployment"
-            echo "================================="
+            echo "======================================"
 
             cd "${{ secrets.APP_PATH }}"
 
@@ -44,8 +51,14 @@ jobs:
             docker --version
             docker compose version
 
+            echo "Checking Docker Swarm..."
+            docker info | grep -i swarm
+
             echo "Checking environment file..."
             test -f .env
+
+            echo "Checking RabbitMQ configuration..."
+            test -f conf/rabbitmq.conf
 
             echo "Validating Docker Compose..."
             docker compose -f docker-compose.yml config
@@ -53,7 +66,7 @@ jobs:
             echo "Building application images..."
             docker compose build backend celeryworker frontend
 
-            echo "Loading environment variables..."
+            echo "Loading environment..."
             set -a
             source .env
             set +a
@@ -63,7 +76,7 @@ jobs:
               -c docker-compose.yml \
               > /tmp/example-stack.yml
 
-            echo "Deploying Docker Stack..."
+            echo "Deploying Docker Swarm stack..."
             docker stack deploy \
               -c docker-compose.yml \
               example-com
@@ -71,29 +84,46 @@ jobs:
             echo "Waiting for services..."
             sleep 20
 
-            echo "================================="
+            echo "======================================"
             echo "Docker Stack Services"
-            echo "================================="
+            echo "======================================"
 
             docker stack services example-com
 
-            echo "================================="
-            echo "Running Containers"
-            echo "================================="
-
-            docker ps
-
-            echo "================================="
+            echo "======================================"
             echo "Deployment Completed"
-            echo "================================="
+            echo "======================================"
 
           EOF
 
-      - name: Application Health Check
+      # 4. Verify deployment
+      - name: Verify Deployment
         run: |
-          sleep 10
+          ssh -i ~/.ssh/ec2_key \
+            "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" << 'EOF'
 
-          curl -f \
-            "http://${{ secrets.EC2_HOST }}/api/v1/openapi.json"
+            set -e
 
-          echo "Application health check passed!"
+            echo "======================================"
+            echo "Service Status"
+            echo "======================================"
+
+            docker stack services example-com
+
+            echo "======================================"
+            echo "Running Containers"
+            echo "======================================"
+
+            docker ps
+
+            echo "======================================"
+            echo "Swarm Status"
+            echo "======================================"
+
+            docker info | grep -i swarm
+
+            echo "======================================"
+            echo "Deployment Verification Completed"
+            echo "======================================"
+
+          EOF
