@@ -69,7 +69,6 @@ services:
       - "traefik.http.routers.flower.entrypoints=http"
       - "traefik.http.services.flower.loadbalancer.server.port=5555"
 
-
   # ============================================================
   # FASTAPI BACKEND
   # ============================================================
