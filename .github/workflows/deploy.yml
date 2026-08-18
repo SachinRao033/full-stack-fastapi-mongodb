@@ -7,83 +7,228 @@ on:
 
 jobs:
   deploy:
+    name: Deploy to EC2
     runs-on: ubuntu-latest
     environment: Secrets
 
     steps:
 
+      # ==========================================
+      # 1. Checkout
+      # ==========================================
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ==========================================
+      # 2. Configure SSH
+      # ==========================================
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
-          chmod 600 ~/.ssh/ec2_key
-          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
+          printf '%s\n' '${{ secrets.EC2_SSH_KEY }}' > ~/.ssh/ec2_key
+
+          chmod 600 ~/.ssh/ec2_key
+
+          ssh-keyscan -H '${{ secrets.EC2_HOST }}' >> ~/.ssh/known_hosts
+
+      # ==========================================
+      # 3. Deploy
+      # ==========================================
       - name: Deploy to EC2
         run: |
           ssh -i ~/.ssh/ec2_key \
-            "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" << 'EOF'
+            '${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}' \
+            'APP_PATH="${{ secrets.APP_PATH }}" bash -s' << 'EOF'
 
             set -e
 
-            cd "${{ secrets.APP_PATH }}"
+            echo "======================================"
+            echo "STARTING DEPLOYMENT"
+            echo "======================================"
+
+            cd "$APP_PATH"
+
+            echo "Application path:"
+            pwd
+
+            # --------------------------------------
+            # Pull latest code
+            # --------------------------------------
 
             echo "Pulling latest code..."
+
             git fetch origin
+
             git reset --hard origin/main
 
-            echo "Checking Docker..."
-            docker --version
-            docker compose version
-
-            echo "Checking Docker Swarm..."
-            docker info --format 'Swarm: {{.Swarm.LocalNodeState}}'
+            # --------------------------------------
+            # Check files
+            # --------------------------------------
 
             echo "Checking required files..."
+
             test -f .env
             test -f docker-compose.yml
-            test -f conf/rabbitmq.conf
 
-            echo "Validating Compose..."
-            docker compose -f docker-compose.yml config > /dev/null
+            # --------------------------------------
+            # Load environment variables
+            # --------------------------------------
+
+            echo "Loading environment..."
+
+            set -a
+            source .env
+            set +a
+
+            echo "Stack name: $STACK_NAME"
+            echo "Domain: $DOMAIN"
+
+            # --------------------------------------
+            # Docker checks
+            # --------------------------------------
+
+            echo "Checking Docker..."
+
+            docker --version
+
+            docker compose version
+
+            # --------------------------------------
+            # Swarm check
+            # --------------------------------------
+
+            echo "Checking Docker Swarm..."
+
+            docker info --format 'Swarm: {{.Swarm.LocalNodeState}}'
+
+            # --------------------------------------
+            # Traefik network
+            # --------------------------------------
+
+            echo "Checking traefik-public network..."
+
+            if ! docker network inspect "$TRAEFIK_PUBLIC_NETWORK" >/dev/null 2>&1; then
+
+              echo "Creating Swarm overlay network..."
+
+              docker network create \
+                --driver overlay \
+                --attachable \
+                "$TRAEFIK_PUBLIC_NETWORK"
+
+            else
+
+              echo "Traefik network already exists."
+
+              NETWORK_DRIVER=$(docker network inspect \
+                "$TRAEFIK_PUBLIC_NETWORK" \
+                --format '{{.Driver}}')
+
+              if [ "$NETWORK_DRIVER" != "overlay" ]; then
+                echo "ERROR: traefik-public is not an overlay network."
+                echo "Current driver: $NETWORK_DRIVER"
+                exit 1
+              fi
+
+            fi
+
+            # --------------------------------------
+            # Compose validation
+            # --------------------------------------
+
+            echo "Validating Docker Compose..."
+
+            docker compose \
+              -f docker-compose.yml \
+              config > /dev/null
+
+            echo "Compose validation successful."
+
+            # --------------------------------------
+            # Build Backend
+            # --------------------------------------
 
             echo "Building backend..."
-            docker compose -f docker-compose.yml build backend
+
+            docker compose \
+              -f docker-compose.yml \
+              build backend
+
+            # --------------------------------------
+            # Build Celery
+            # --------------------------------------
 
             echo "Building celeryworker..."
-            docker compose -f docker-compose.yml build celeryworker
+
+            docker compose \
+              -f docker-compose.yml \
+              build celeryworker
+
+            # --------------------------------------
+            # Build Frontend
+            # --------------------------------------
 
             echo "Building frontend..."
-            docker compose -f docker-compose.yml build frontend
 
-            echo "Deploying Docker Stack..."
+            docker compose \
+              -f docker-compose.yml \
+              build frontend
+
+            # --------------------------------------
+            # Deploy Docker Swarm
+            # --------------------------------------
+
+            echo "Deploying stack: $STACK_NAME"
+
             docker stack deploy \
+              --detach=false \
               -c docker-compose.yml \
-              example-com
+              "$STACK_NAME"
+
+            # --------------------------------------
+            # Wait
+            # --------------------------------------
 
             echo "Waiting for services..."
+
             sleep 20
+
+            # --------------------------------------
+            # Stack services
+            # --------------------------------------
 
             echo "======================================"
             echo "STACK SERVICES"
             echo "======================================"
 
-            docker stack services example-com
+            docker stack services "$STACK_NAME"
+
+            # --------------------------------------
+            # Service status
+            # --------------------------------------
 
             echo "======================================"
             echo "SERVICE STATUS"
             echo "======================================"
 
-            docker service ps example-com_proxy
-            docker service ps example-com_backend
-            docker service ps example-com_celeryworker
-            docker service ps example-com_frontend
-            docker service ps example-com_mongodb
-            docker service ps example-com_queue
-            docker service ps example-com_flower
+            docker service ps "${STACK_NAME}_proxy" || true
+
+            docker service ps "${STACK_NAME}_backend" || true
+
+            docker service ps "${STACK_NAME}_celeryworker" || true
+
+            docker service ps "${STACK_NAME}_frontend" || true
+
+            docker service ps "${STACK_NAME}_mongodb" || true
+
+            docker service ps "${STACK_NAME}_queue" || true
+
+            docker service ps "${STACK_NAME}_flower" || true
+
+            # --------------------------------------
+            # Running containers
+            # --------------------------------------
 
             echo "======================================"
             echo "RUNNING CONTAINERS"
@@ -92,7 +237,7 @@ jobs:
             docker ps
 
             echo "======================================"
-            echo "DEPLOYMENT SUCCESSFUL"
+            echo "DEPLOYMENT COMPLETED"
             echo "======================================"
 
           EOF
